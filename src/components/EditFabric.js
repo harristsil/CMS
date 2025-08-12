@@ -44,11 +44,11 @@ const EditFabric = () => {
   }, []);
 
   const handlePanStart = useCallback((e) => {
-    if (e.ctrlKey || e.metaKey) {
+    if ((e.ctrlKey || e.metaKey) || zoom > 1) {
       setIsPanning(true);
       setPanStart({ x: e.clientX - pan.x, y: e.clientY - pan.y });
     }
-  }, [pan]);
+  }, [pan, zoom]);
 
   const handlePanMove = useCallback((e) => {
     if (isPanning) {
@@ -151,10 +151,11 @@ const EditFabric = () => {
     const top = Math.min(cropLines.horizontal1, cropLines.horizontal2);
     const bottom = Math.max(cropLines.horizontal1, cropLines.horizontal2);
 
-    const cropX = (left / 100) * img.naturalWidth;
-    const cropY = (top / 100) * img.naturalHeight;
-    const cropWidth = ((right - left) / 100) * img.naturalWidth;
-    const cropHeight = ((bottom - top) / 100) * img.naturalHeight;
+    // Crop exactly at the line positions (lines act as knife edges)
+    const cropX = Math.floor((left / 100) * img.naturalWidth);
+    const cropY = Math.floor((top / 100) * img.naturalHeight);
+    const cropWidth = Math.floor((right / 100) * img.naturalWidth) - cropX;
+    const cropHeight = Math.floor((bottom / 100) * img.naturalHeight) - cropY;
 
     if (cropWidth > 0 && cropHeight > 0) {
       const tileCanvas = document.createElement('canvas');
@@ -226,8 +227,6 @@ const EditFabric = () => {
   return (
     <div className="edit-fabric">
       <div className="container">
-        <h1 className="page-title">Edit Fabric</h1>
-        
         <div className="fabric-workspace">
           <div className="left-panel">
             <div className="upload-section">
@@ -262,7 +261,7 @@ const EditFabric = () => {
                   ref={containerRef}
                   onWheel={handleWheel}
                   onMouseDown={handlePanStart}
-                  style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+                  style={{ cursor: isPanning ? 'grabbing' : (zoom > 1 ? 'grab' : 'default') }}
                 >
                   <img
                     ref={imageRef}

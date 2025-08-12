@@ -143,39 +143,56 @@
 
 .crop-line {
   position: absolute;
-  background-color: #007bff;
-  cursor: grab;
+  background-color: #00ff00;
   z-index: 10;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.8);
   pointer-events: auto;
 }
 
 .crop-line:hover {
-  background-color: #0056b3;
+  background-color: #00ff00;
 }
 
 .crop-line:active {
-  cursor: grabbing;
+  background-color: #00ff00;
 }
 
 .crop-line.vertical {
-  width: 1px;
+  width: 0.5px;
   height: 100%;
   top: 0;
-  transform: scaleX(1);
+  cursor: ew-resize;
+}
+
+.crop-line.vertical:hover {
+  cursor: ew-resize;
+}
+
+.crop-line.vertical:active {
+  cursor: ew-resize;
 }
 
 .crop-line.horizontal {
-  height: 1px;
+  height: 0.5px;
   width: 100%;
   left: 0;
-  transform: scaleY(1);
+  cursor: ns-resize;
+}
+
+.crop-line.horizontal:hover {
+  cursor: ns-resize;
+}
+
+.crop-line.horizontal:active {
+  cursor: ns-resize;
 }
 
 .crop-area {
   position: absolute;
-  border: 2px solid #007bff;
-  background-color: rgba(0, 123, 255, 0.1);
+  border-left: 1px solid #007bff;
+  border-top: 1px solid #007bff;
+  border-right: none;
+  border-bottom: none;
+  background-color: transparent;
   pointer-events: none;
   z-index: 5;
 }
