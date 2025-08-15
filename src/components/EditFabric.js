@@ -18,24 +18,143 @@ const EditFabric = () => {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [tileCanvas, setTileCanvas] = useState(null);
   const [previewZoom, setPreviewZoom] = useState(1);
+  const [previewPan, setPreviewPan] = useState({ x: 0, y: 0 });
+  const [isPreviewPanning, setIsPreviewPanning] = useState(false);
+  const [previewPanStart, setPreviewPanStart] = useState({ x: 0, y: 0 });
+  const [dragState, setDragState] = useState('idle');
+  const [uploadError, setUploadError] = useState('');
+  const [imageDisplaySize, setImageDisplaySize] = useState({ width: 0, height: 0, left: 0, top: 0 });
   const imageRef = useRef(null);
   const containerRef = useRef(null);
   const previewCanvasRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  const validateFile = (file) => {
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    const allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    
+    if (!allowedTypes.includes(file.type)) {
+      return 'Please select a valid image file (JPEG, PNG, GIF, or WebP)';
+    }
+    
+    if (file.size > maxSize) {
+      return 'File size must be less than 10MB';
+    }
+    
+    return null;
+  };
+
+  const processFile = (file) => {
+    setUploadError('');
+    
+    const error = validateFile(file);
+    if (error) {
+      setUploadError(error);
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setSelectedImage(event.target.result);
+      setOriginalFileName(file.name);
+      setImageLoaded(true);
+      setZoom(1);
+      setPan({ x: 0, y: 0 });
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleImageUpload = (e) => {
     const file = e.target.files[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        setSelectedImage(event.target.result);
-        setOriginalFileName(file.name);
-        setImageLoaded(true);
-        setZoom(1);
-        setPan({ x: 0, y: 0 });
-      };
-      reader.readAsDataURL(file);
+      processFile(file);
     }
   };
+
+  const handleDragEnter = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragState('hover');
+  };
+
+  const handleDragLeave = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!e.currentTarget.contains(e.relatedTarget)) {
+      setDragState('idle');
+    }
+  };
+
+  const handleDragOver = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragState('hover');
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragState('idle');
+    
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length > 0) {
+      processFile(files[0]);
+    }
+  };
+
+  const handleUploadAreaClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handlePreviewPanStart = useCallback((e) => {
+    setIsPreviewPanning(true);
+    setPreviewPanStart({ x: e.clientX - previewPan.x, y: e.clientY - previewPan.y });
+  }, [previewPan]);
+
+  const handlePreviewPanMove = useCallback((e) => {
+    if (isPreviewPanning) {
+      setPreviewPan({
+        x: e.clientX - previewPanStart.x,
+        y: e.clientY - previewPanStart.y
+      });
+    }
+  }, [isPreviewPanning, previewPanStart]);
+
+  const handlePreviewPanEnd = useCallback(() => {
+    setIsPreviewPanning(false);
+  }, []);
+
+  const handlePreviewWheel = useCallback((e) => {
+    e.preventDefault();
+    const zoomFactor = e.deltaY > 0 ? 0.9 : 1.1;
+    setPreviewZoom(prevZoom => Math.max(0.01, Math.min(10, prevZoom * zoomFactor)));
+  }, []);
+
+  const calculateImageDisplaySize = useCallback(() => {
+    if (!imageRef.current || !containerRef.current) return;
+
+    const img = imageRef.current;
+    const container = containerRef.current;
+    const containerRect = container.getBoundingClientRect();
+    
+    const imgAspect = img.naturalWidth / img.naturalHeight;
+    const containerAspect = containerRect.width / containerRect.height;
+    
+    let displayWidth, displayHeight;
+    
+    if (imgAspect > containerAspect) {
+      displayWidth = containerRect.width;
+      displayHeight = containerRect.width / imgAspect;
+    } else {
+      displayHeight = containerRect.height;
+      displayWidth = containerRect.height * imgAspect;
+    }
+    
+    const left = (containerRect.width - displayWidth) / 2;
+    const top = (containerRect.height - displayHeight) / 2;
+    
+    setImageDisplaySize({ width: displayWidth, height: displayHeight, left, top });
+  }, []);
 
   const handleWheel = useCallback((e) => {
     e.preventDefault();
@@ -77,34 +196,18 @@ const EditFabric = () => {
     if (!isDragging || !containerRef.current || !imageRef.current) return;
 
     const containerRect = containerRef.current.getBoundingClientRect();
-    const img = imageRef.current;
     
     // Calculate the mouse position relative to the container
     const mouseX = e.clientX - containerRect.left;
     const mouseY = e.clientY - containerRect.top;
     
-    // Convert container coordinates to image coordinates accounting for zoom and pan
+    // Use the calculated image display dimensions
+    const displayWidth = imageDisplaySize.width * zoom;
+    const displayHeight = imageDisplaySize.height * zoom;
+    
+    // Calculate the image position considering pan and zoom
     const containerCenterX = containerRect.width / 2;
     const containerCenterY = containerRect.height / 2;
-    
-    // Calculate image dimensions as displayed
-    const imgAspect = img.naturalWidth / img.naturalHeight;
-    const containerAspect = containerRect.width / containerRect.height;
-    
-    let displayWidth, displayHeight;
-    if (imgAspect > containerAspect) {
-      displayWidth = containerRect.width;
-      displayHeight = containerRect.width / imgAspect;
-    } else {
-      displayHeight = containerRect.height;
-      displayWidth = containerRect.height * imgAspect;
-    }
-    
-    // Apply zoom
-    displayWidth *= zoom;
-    displayHeight *= zoom;
-    
-    // Calculate the image position considering pan
     const imgLeft = containerCenterX - displayWidth / 2 + pan.x;
     const imgTop = containerCenterY - displayHeight / 2 + pan.y;
     
@@ -121,7 +224,7 @@ const EditFabric = () => {
       percentage = Math.max(0, Math.min(100, percentage));
       setCropLines(prev => ({ ...prev, [isDragging]: percentage }));
     }
-  }, [isDragging, isPanning, handlePanMove, zoom, pan]);
+  }, [isDragging, isPanning, handlePanMove, zoom, pan, imageDisplaySize]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(null);
@@ -138,6 +241,32 @@ const EditFabric = () => {
       };
     }
   }, [isDragging, isPanning, handleMouseMove, handleMouseUp]);
+
+  React.useEffect(() => {
+    if (isPreviewPanning) {
+      document.addEventListener('mousemove', handlePreviewPanMove);
+      document.addEventListener('mouseup', handlePreviewPanEnd);
+      return () => {
+        document.removeEventListener('mousemove', handlePreviewPanMove);
+        document.removeEventListener('mouseup', handlePreviewPanEnd);
+      };
+    }
+  }, [isPreviewPanning, handlePreviewPanMove, handlePreviewPanEnd]);
+
+  React.useEffect(() => {
+    if (imageLoaded) {
+      calculateImageDisplaySize();
+      const handleResize = () => calculateImageDisplaySize();
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+    }
+  }, [imageLoaded, calculateImageDisplaySize]);
+
+  React.useEffect(() => {
+    if (imageLoaded) {
+      calculateImageDisplaySize();
+    }
+  }, [zoom, pan, imageLoaded, calculateImageDisplaySize]);
 
   const updatePreview = useCallback(() => {
     if (!imageRef.current || !previewCanvasRef.current || !selectedImage) return;
@@ -181,15 +310,18 @@ const EditFabric = () => {
       const scaledTileHeight = cropHeight * previewZoom;
 
       if (scaledTileWidth > 0 && scaledTileHeight > 0) {
-        const tilesX = Math.ceil(canvas.offsetWidth / scaledTileWidth) + 1;
-        const tilesY = Math.ceil(canvas.offsetHeight / scaledTileHeight) + 1;
+        const tilesX = Math.ceil(canvas.offsetWidth / scaledTileWidth) + 2;
+        const tilesY = Math.ceil(canvas.offsetHeight / scaledTileHeight) + 2;
 
-        for (let x = 0; x < tilesX; x++) {
-          for (let y = 0; y < tilesY; y++) {
+        const startX = Math.floor(-previewPan.x / scaledTileWidth) - 1;
+        const startY = Math.floor(-previewPan.y / scaledTileHeight) - 1;
+
+        for (let x = startX; x < startX + tilesX; x++) {
+          for (let y = startY; y < startY + tilesY; y++) {
             ctx.drawImage(
               tileCanvas,
-              x * scaledTileWidth,
-              y * scaledTileHeight,
+              x * scaledTileWidth + previewPan.x,
+              y * scaledTileHeight + previewPan.y,
               scaledTileWidth,
               scaledTileHeight
             );
@@ -199,7 +331,7 @@ const EditFabric = () => {
 
       setTileCanvas(tileCanvas);
     }
-  }, [cropLines, selectedImage, previewZoom]);
+  }, [cropLines, selectedImage, previewZoom, previewPan]);
 
   useEffect(() => {
     updatePreview();
@@ -230,18 +362,37 @@ const EditFabric = () => {
         <div className="fabric-workspace">
           <div className="left-panel">
             <div className="upload-section">
-              <div className="upload-area">
+              <div 
+                className={`upload-area ${dragState}`}
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                onClick={handleUploadAreaClick}
+              >
                 <input
+                  ref={fileInputRef}
                   type="file"
                   id="fabric-upload"
                   accept="image/*"
                   onChange={handleImageUpload}
                   className="file-input"
                 />
-                <label htmlFor="fabric-upload" className="upload-button">
-                  Upload Fabric Image
-                </label>
-                {originalFileName && (
+                <div className="upload-content">
+                  <div className="upload-icon">📁</div>
+                  <div className="upload-text">
+                    <span className="primary-text">
+                      {dragState === 'hover' ? 'Drop image here' : 'Drop image or click to browse'}
+                    </span>
+                    <span className="secondary-text">
+                      JPEG, PNG, GIF, WebP (max 10MB)
+                    </span>
+                  </div>
+                </div>
+                {uploadError && (
+                  <p className="error-message">{uploadError}</p>
+                )}
+                {originalFileName && !uploadError && (
                   <p className="file-name">Selected: {originalFileName}</p>
                 )}
               </div>
@@ -272,7 +423,10 @@ const EditFabric = () => {
                       transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
                       transformOrigin: 'center center'
                     }}
-                    onLoad={() => setImageLoaded(true)}
+                    onLoad={() => {
+                      setImageLoaded(true);
+                      setTimeout(calculateImageDisplaySize, 0);
+                    }}
                     draggable={false}
                   />
                   
@@ -280,7 +434,11 @@ const EditFabric = () => {
                     className="crop-overlay"
                     style={{
                       transform: `scale(${zoom}) translate(${pan.x / zoom}px, ${pan.y / zoom}px)`,
-                      transformOrigin: 'center center'
+                      transformOrigin: 'center center',
+                      width: `${imageDisplaySize.width}px`,
+                      height: `${imageDisplaySize.height}px`,
+                      left: `${imageDisplaySize.left}px`,
+                      top: `${imageDisplaySize.top}px`
                     }}
                   >
                     <div
@@ -316,11 +474,6 @@ const EditFabric = () => {
                   </div>
                 </div>
                 
-                <div className="editor-controls">
-                  <button onClick={handleCrop} className="crop-button">
-                    Download Tile
-                  </button>
-                </div>
               </div>
             )}
           </div>
@@ -329,17 +482,25 @@ const EditFabric = () => {
             {imageLoaded && (
               <div className="preview-section">
                 <div className="preview-header">
-                  <h3>Pattern Preview</h3>
+                  <div className="preview-title-section">
+                    <h3>Pattern Preview</h3>
+                    <button onClick={handleCrop} className="download-tile-button">
+                      Download Tile
+                    </button>
+                  </div>
                   <div className="preview-zoom-controls">
-                    <button onClick={() => setPreviewZoom(Math.max(0.1, previewZoom - 0.25))}>-</button>
-                    <span>Zoom: {Math.round(previewZoom * 100)}%</span>
-                    <button onClick={() => setPreviewZoom(Math.min(10, previewZoom + 0.25))}>+</button>
-                    <button onClick={() => setPreviewZoom(1)}>Reset</button>
+                    <button onClick={() => setPreviewZoom(Math.max(0.01, previewZoom > 0.5 ? previewZoom - 0.25 : previewZoom - 0.05))}>-</button>
+                    <span>Zoom: {previewZoom >= 0.1 ? Math.round(previewZoom * 100) : Math.round(previewZoom * 1000) / 10}%</span>
+                    <button onClick={() => setPreviewZoom(Math.min(10, previewZoom >= 0.5 ? previewZoom + 0.25 : previewZoom + 0.05))}>+</button>
+                    <button onClick={() => { setPreviewZoom(1); setPreviewPan({ x: 0, y: 0 }); }}>Reset</button>
                   </div>
                 </div>
                 <canvas 
                   ref={previewCanvasRef}
                   className="preview-canvas"
+                  onMouseDown={handlePreviewPanStart}
+                  onWheel={handlePreviewWheel}
+                  style={{ cursor: isPreviewPanning ? 'grabbing' : 'grab' }}
                 />
               </div>
             )}
