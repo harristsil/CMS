@@ -24,6 +24,18 @@ const EditFabric = () => {
   const [dragState, setDragState] = useState('idle');
   const [uploadError, setUploadError] = useState('');
   const [imageDisplaySize, setImageDisplaySize] = useState({ width: 0, height: 0, left: 0, top: 0 });
+  const [editorMode, setEditorMode] = useState('crop');
+  const [gradientRemovalMode, setGradientRemovalMode] = useState('uniform');
+  const [selectionArea, setSelectionArea] = useState(null);
+  const [isSelecting, setIsSelecting] = useState(false);
+  const [selectionStart, setSelectionStart] = useState({ x: 0, y: 0 });
+  const [gradientPreview, setGradientPreview] = useState(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [originalImageBeforeGradient, setOriginalImageBeforeGradient] = useState(null);
+  const [veryOriginalImage, setVeryOriginalImage] = useState(null);
+  const [gradientStrength, setGradientStrength] = useState(100);
+  const [brightnessPreservation, setBrightnessPreservation] = useState(90);
+  const [colorPreservation, setColorPreservation] = useState(0);
   const imageRef = useRef(null);
   const containerRef = useRef(null);
   const previewCanvasRef = useRef(null);
@@ -55,7 +67,10 @@ const EditFabric = () => {
 
     const reader = new FileReader();
     reader.onload = (event) => {
-      setSelectedImage(event.target.result);
+      const imageData = event.target.result;
+      setSelectedImage(imageData);
+      setVeryOriginalImage(imageData); // Store the truly original image
+      setOriginalImageBeforeGradient(null); // Reset gradient undo
       setOriginalFileName(file.name);
       setImageLoaded(true);
       setZoom(1);
@@ -106,6 +121,156 @@ const EditFabric = () => {
     fileInputRef.current?.click();
   };
 
+  const handleModeSwitch = (mode) => {
+    setEditorMode(mode);
+    if (mode === 'gradient') {
+      setSelectionArea(null);
+      setGradientPreview(null);
+      // Store the truly original image for undo functionality
+      if (veryOriginalImage && !originalImageBeforeGradient) {
+        setOriginalImageBeforeGradient(veryOriginalImage);
+      }
+      // Recalculate image display size when switching to gradient mode
+      setTimeout(calculateImageDisplaySize, 100);
+    }
+  };
+
+  const handleGradientModeChange = (mode) => {
+    setGradientRemovalMode(mode);
+    if (selectionArea) {
+      processGradientRemoval();
+    }
+  };
+
+  const processGradientRemoval = useCallback(async () => {
+    if (!selectionArea || !selectedImage) return;
+    
+    console.log('Processing gradient removal with:', {
+      selection: selectionArea, 
+      mode: gradientRemovalMode,
+      strength: gradientStrength,
+      brightness: brightnessPreservation,
+      color: colorPreservation
+    });
+    setIsProcessing(true);
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = imageRef.current;
+      
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      ctx.drawImage(img, 0, 0);
+      
+      const imageData = canvas.toDataURL('image/jpeg', 0.9);
+      
+      const response = await fetch('http://localhost:5001/api/gradient-removal', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          image: imageData,
+          selection: selectionArea,
+          mode: gradientRemovalMode,
+          imageSize: {
+            width: img.naturalWidth,
+            height: img.naturalHeight
+          },
+          settings: {
+            gradientStrength: gradientStrength / 100,
+            brightnessPreservation: brightnessPreservation / 100,
+            colorPreservation: colorPreservation / 100
+          }
+        }),
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        setGradientPreview(result.processedImage);
+        console.log('Gradient removal successful');
+      } else {
+        console.error('Gradient removal failed:', response.status);
+      }
+    } catch (error) {
+      console.error('Gradient removal processing failed:', error);
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [selectionArea, selectedImage, gradientRemovalMode, gradientStrength, brightnessPreservation, colorPreservation]);
+
+  // Debounced processing for real-time updates
+  const debouncedProcessGradientRemoval = useCallback(
+    (() => {
+      let timeoutId;
+      return () => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+          if (selectionArea) {
+            processGradientRemoval();
+          }
+        }, 500); // 500ms delay
+      };
+    })(),
+    [processGradientRemoval, selectionArea]
+  );
+
+  // Trigger processing when strength values change
+  useEffect(() => {
+    if (selectionArea) {
+      debouncedProcessGradientRemoval();
+    }
+  }, [gradientStrength, brightnessPreservation, colorPreservation, debouncedProcessGradientRemoval]);
+
+  const applyGradientRemoval = () => {
+    if (gradientPreview) {
+      setSelectedImage(gradientPreview);
+      setEditorMode('crop');
+      setSelectionArea(null);
+      setGradientPreview(null);
+      // Force preview update after applying gradient removal
+      setTimeout(() => {
+        calculateImageDisplaySize();
+        // Trigger preview update by clearing and recalculating
+        const currentZoom = zoom;
+        const currentPan = pan;
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        setTimeout(() => {
+          setZoom(currentZoom);
+          setPan(currentPan);
+        }, 100);
+      }, 100);
+    }
+  };
+
+  const undoGradientRemoval = () => {
+    if (originalImageBeforeGradient) {
+      setSelectedImage(originalImageBeforeGradient);
+      // Don't clear originalImageBeforeGradient - keep it for future undos
+      setGradientPreview(null);
+      setSelectionArea(null);
+      // Force preview update after undo
+      setTimeout(() => {
+        calculateImageDisplaySize();
+        const currentZoom = zoom;
+        const currentPan = pan;
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        setTimeout(() => {
+          setZoom(currentZoom);
+          setPan(currentPan);
+        }, 100);
+      }, 100);
+    }
+  };
+
+  const cancelGradientRemoval = () => {
+    setEditorMode('crop');
+    setSelectionArea(null);
+    setGradientPreview(null);
+  };
+
   const handlePreviewPanStart = useCallback((e) => {
     setIsPreviewPanning(true);
     setPreviewPanStart({ x: e.clientX - previewPan.x, y: e.clientY - previewPan.y });
@@ -131,7 +296,10 @@ const EditFabric = () => {
   }, []);
 
   const calculateImageDisplaySize = useCallback(() => {
-    if (!imageRef.current || !containerRef.current) return;
+    if (!imageRef.current || !containerRef.current) {
+      console.log('calculateImageDisplaySize: Missing refs');
+      return;
+    }
 
     const img = imageRef.current;
     const container = containerRef.current;
@@ -153,7 +321,9 @@ const EditFabric = () => {
     const left = (containerRect.width - displayWidth) / 2;
     const top = (containerRect.height - displayHeight) / 2;
     
-    setImageDisplaySize({ width: displayWidth, height: displayHeight, left, top });
+    const newSize = { width: displayWidth, height: displayHeight, left, top };
+    console.log('Image display size calculated:', newSize);
+    setImageDisplaySize(newSize);
   }, []);
 
   const handleWheel = useCallback((e) => {
@@ -187,9 +357,86 @@ const EditFabric = () => {
     setIsDragging(lineType);
   };
 
+  const handleSelectionStart = useCallback((e) => {
+    if (editorMode !== 'gradient') return;
+    
+    e.preventDefault();
+    e.stopPropagation();
+    
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - containerRect.left;
+    const mouseY = e.clientY - containerRect.top;
+    
+    const displayWidth = imageDisplaySize.width * zoom;
+    const displayHeight = imageDisplaySize.height * zoom;
+    const containerCenterX = containerRect.width / 2;
+    const containerCenterY = containerRect.height / 2;
+    const imgLeft = containerCenterX - displayWidth / 2 + pan.x;
+    const imgTop = containerCenterY - displayHeight / 2 + pan.y;
+    
+    console.log('Selection start:', { mouseX, mouseY, imgLeft, imgTop, displayWidth, displayHeight });
+    
+    if (mouseX >= imgLeft && mouseX <= imgLeft + displayWidth &&
+        mouseY >= imgTop && mouseY <= imgTop + displayHeight) {
+      setIsSelecting(true);
+      setSelectionStart({ x: mouseX, y: mouseY });
+      setSelectionArea(null);
+      console.log('Starting selection');
+    } else {
+      console.log('Click outside image bounds');
+    }
+  }, [editorMode, imageDisplaySize, zoom, pan]);
+
+  const handleSelectionMove = useCallback((e) => {
+    if (!isSelecting || editorMode !== 'gradient') return;
+    
+    const containerRect = containerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - containerRect.left;
+    const mouseY = e.clientY - containerRect.top;
+    
+    const width = Math.abs(mouseX - selectionStart.x);
+    const height = Math.abs(mouseY - selectionStart.y);
+    const left = Math.min(mouseX, selectionStart.x);
+    const top = Math.min(mouseY, selectionStart.y);
+    
+    const displayWidth = imageDisplaySize.width * zoom;
+    const displayHeight = imageDisplaySize.height * zoom;
+    const containerCenterX = containerRect.width / 2;
+    const containerCenterY = containerRect.height / 2;
+    const imgLeft = containerCenterX - displayWidth / 2 + pan.x;
+    const imgTop = containerCenterY - displayHeight / 2 + pan.y;
+    
+    const relativeLeft = (left - imgLeft) / displayWidth;
+    const relativeTop = (top - imgTop) / displayHeight;
+    const relativeWidth = width / displayWidth;
+    const relativeHeight = height / displayHeight;
+    
+    const newSelection = {
+      left: Math.max(0, Math.min(1, relativeLeft)),
+      top: Math.max(0, Math.min(1, relativeTop)),
+      width: Math.max(0, Math.min(1 - Math.max(0, relativeLeft), relativeWidth)),
+      height: Math.max(0, Math.min(1 - Math.max(0, relativeTop), relativeHeight))
+    };
+    
+    console.log('Selection area:', newSelection);
+    setSelectionArea(newSelection);
+  }, [isSelecting, editorMode, selectionStart, imageDisplaySize, zoom, pan]);
+
+  const handleSelectionEnd = useCallback(() => {
+    setIsSelecting(false);
+    if (selectionArea && selectionArea.width > 0.01 && selectionArea.height > 0.01) {
+      setTimeout(() => processGradientRemoval(), 100);
+    }
+  }, [selectionArea, processGradientRemoval]);
+
   const handleMouseMove = useCallback((e) => {
     if (isPanning) {
       handlePanMove(e);
+      return;
+    }
+
+    if (isSelecting) {
+      handleSelectionMove(e);
       return;
     }
 
@@ -224,15 +471,16 @@ const EditFabric = () => {
       percentage = Math.max(0, Math.min(100, percentage));
       setCropLines(prev => ({ ...prev, [isDragging]: percentage }));
     }
-  }, [isDragging, isPanning, handlePanMove, zoom, pan, imageDisplaySize]);
+  }, [isDragging, isPanning, isSelecting, handlePanMove, handleSelectionMove, zoom, pan, imageDisplaySize]);
 
   const handleMouseUp = useCallback(() => {
     setIsDragging(null);
     handlePanEnd();
-  }, [handlePanEnd]);
+    handleSelectionEnd();
+  }, [handlePanEnd, handleSelectionEnd]);
 
   React.useEffect(() => {
-    if (isDragging || isPanning) {
+    if (isDragging || isPanning || isSelecting) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
       return () => {
@@ -240,7 +488,7 @@ const EditFabric = () => {
         document.removeEventListener('mouseup', handleMouseUp);
       };
     }
-  }, [isDragging, isPanning, handleMouseMove, handleMouseUp]);
+  }, [isDragging, isPanning, isSelecting, handleMouseMove, handleMouseUp]);
 
   React.useEffect(() => {
     if (isPreviewPanning) {
@@ -298,10 +546,16 @@ const EditFabric = () => {
         0, 0, cropWidth, cropHeight
       );
 
-      canvas.width = canvas.offsetWidth * window.devicePixelRatio;
-      canvas.height = canvas.offsetHeight * window.devicePixelRatio;
-      canvas.style.width = canvas.offsetWidth + 'px';
-      canvas.style.height = canvas.offsetHeight + 'px';
+      // Use fixed canvas dimensions based on available space
+      const canvasContainer = canvas.parentElement;
+      const containerRect = canvasContainer.getBoundingClientRect();
+      const availableWidth = containerRect.width - 32; // Account for padding
+      const availableHeight = Math.max(300, containerRect.height - 120); // Min height, minus header space
+      
+      canvas.width = availableWidth * window.devicePixelRatio;
+      canvas.height = availableHeight * window.devicePixelRatio;
+      canvas.style.width = availableWidth + 'px';
+      canvas.style.height = availableHeight + 'px';
       ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -310,8 +564,8 @@ const EditFabric = () => {
       const scaledTileHeight = cropHeight * previewZoom;
 
       if (scaledTileWidth > 0 && scaledTileHeight > 0) {
-        const tilesX = Math.ceil(canvas.offsetWidth / scaledTileWidth) + 2;
-        const tilesY = Math.ceil(canvas.offsetHeight / scaledTileHeight) + 2;
+        const tilesX = Math.ceil(availableWidth / scaledTileWidth) + 2;
+        const tilesY = Math.ceil(availableHeight / scaledTileHeight) + 2;
 
         const startX = Math.floor(-previewPan.x / scaledTileWidth) - 1;
         const startY = Math.floor(-previewPan.y / scaledTileHeight) - 1;
@@ -400,6 +654,133 @@ const EditFabric = () => {
 
             {imageLoaded && (
               <div className="editor-section">
+
+                {editorMode === 'gradient' && (
+                  <div className="gradient-controls">
+                    <div className="gradient-mode-selector">
+                      <label>
+                        <input
+                          type="radio"
+                          value="uniform"
+                          checked={gradientRemovalMode === 'uniform'}
+                          onChange={(e) => handleGradientModeChange(e.target.value)}
+                        />
+                        Uniform (Solid Fabrics)
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          value="advanced"
+                          checked={gradientRemovalMode === 'advanced'}
+                          onChange={(e) => handleGradientModeChange(e.target.value)}
+                        />
+                        Advanced (Multi-color)
+                      </label>
+                    </div>
+
+                    <div className="strength-controls">
+                      <h4>Adjustment Controls</h4>
+                      
+                      <div className="control-group">
+                        <label className="control-label">
+                          Gradient Removal Strength: {gradientStrength}%
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={gradientStrength}
+                          onChange={(e) => setGradientStrength(parseInt(e.target.value))}
+                          className="strength-slider"
+                        />
+                        <span className="control-hint">How much gradient to remove</span>
+                      </div>
+
+                      <div className="control-group">
+                        <label className="control-label">
+                          Brightness Preservation: {brightnessPreservation}%
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={brightnessPreservation}
+                          onChange={(e) => setBrightnessPreservation(parseInt(e.target.value))}
+                          className="strength-slider"
+                        />
+                        <span className="control-hint">Maintain original brightness</span>
+                      </div>
+
+                      <div className="control-group">
+                        <label className="control-label">
+                          Color Preservation: {colorPreservation}%
+                        </label>
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={colorPreservation}
+                          onChange={(e) => setColorPreservation(parseInt(e.target.value))}
+                          className="strength-slider"
+                        />
+                        <span className="control-hint">Maintain original color tone</span>
+                      </div>
+
+                    </div>
+                    
+                    <div className="select-all-section">
+                      <button 
+                        onClick={() => {
+                          // Select the entire image
+                          setSelectionArea({
+                            left: 0,
+                            top: 0,
+                            width: 1,
+                            height: 1
+                          });
+                          // Trigger gradient removal processing
+                          setTimeout(() => processGradientRemoval(), 100);
+                        }}
+                        className="select-all-button"
+                      >
+                        Select All
+                      </button>
+                    </div>
+
+                    <div className="gradient-actions">
+                      <button 
+                        onClick={applyGradientRemoval} 
+                        className="apply-button"
+                        disabled={!gradientPreview || isProcessing}
+                      >
+                        {isProcessing ? 'Processing...' : 'Apply'}
+                      </button>
+                      <button 
+                        onClick={cancelGradientRemoval} 
+                        className="cancel-button"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    {originalImageBeforeGradient && (
+                      <div className="undo-section">
+                        <button 
+                          onClick={undoGradientRemoval}
+                          className="undo-button"
+                        >
+                          Undo Gradient Removal
+                        </button>
+                      </div>
+                    )}
+                    {selectionArea && (
+                      <div className="selection-info">
+                        <p>Selection area: {Math.round(selectionArea.width * 100)}% × {Math.round(selectionArea.height * 100)}%</p>
+                        <p>Tip: Select a small representative area for best results</p>
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 <div className="zoom-controls">
                   <button onClick={() => setZoom(Math.max(0.5, zoom - 0.25))}>-</button>
                   <span>Zoom: {Math.round(zoom * 100)}%</span>
@@ -411,8 +792,18 @@ const EditFabric = () => {
                   className="image-editor" 
                   ref={containerRef}
                   onWheel={handleWheel}
-                  onMouseDown={handlePanStart}
-                  style={{ cursor: isPanning ? 'grabbing' : (zoom > 1 ? 'grab' : 'default') }}
+                  onMouseDown={(e) => {
+                    if (editorMode === 'gradient') {
+                      handleSelectionStart(e);
+                    } else {
+                      handlePanStart(e);
+                    }
+                  }}
+                  style={{ 
+                    cursor: isPanning ? 'grabbing' : 
+                           (editorMode === 'gradient' ? 'crosshair' : 
+                           (zoom > 1 ? 'grab' : 'default'))
+                  }}
                 >
                   <img
                     ref={imageRef}
@@ -441,36 +832,52 @@ const EditFabric = () => {
                       top: `${imageDisplaySize.top}px`
                     }}
                   >
-                    <div
-                      className="crop-line vertical"
-                      style={{ left: `${cropLines.vertical1}%` }}
-                      onMouseDown={(e) => handleMouseDown('vertical1', e)}
-                    />
-                    <div
-                      className="crop-line vertical"
-                      style={{ left: `${cropLines.vertical2}%` }}
-                      onMouseDown={(e) => handleMouseDown('vertical2', e)}
-                    />
-                    <div
-                      className="crop-line horizontal"
-                      style={{ top: `${cropLines.horizontal1}%` }}
-                      onMouseDown={(e) => handleMouseDown('horizontal1', e)}
-                    />
-                    <div
-                      className="crop-line horizontal"
-                      style={{ top: `${cropLines.horizontal2}%` }}
-                      onMouseDown={(e) => handleMouseDown('horizontal2', e)}
-                    />
-                    
-                    <div
-                      className="crop-area"
-                      style={{
-                        left: `${Math.min(cropLines.vertical1, cropLines.vertical2)}%`,
-                        top: `${Math.min(cropLines.horizontal1, cropLines.horizontal2)}%`,
-                        width: `${Math.abs(cropLines.vertical2 - cropLines.vertical1)}%`,
-                        height: `${Math.abs(cropLines.horizontal2 - cropLines.horizontal1)}%`
-                      }}
-                    />
+                    {editorMode === 'crop' && (
+                      <>
+                        <div
+                          className="crop-line vertical"
+                          style={{ left: `${cropLines.vertical1}%` }}
+                          onMouseDown={(e) => handleMouseDown('vertical1', e)}
+                        />
+                        <div
+                          className="crop-line vertical"
+                          style={{ left: `${cropLines.vertical2}%` }}
+                          onMouseDown={(e) => handleMouseDown('vertical2', e)}
+                        />
+                        <div
+                          className="crop-line horizontal"
+                          style={{ top: `${cropLines.horizontal1}%` }}
+                          onMouseDown={(e) => handleMouseDown('horizontal1', e)}
+                        />
+                        <div
+                          className="crop-line horizontal"
+                          style={{ top: `${cropLines.horizontal2}%` }}
+                          onMouseDown={(e) => handleMouseDown('horizontal2', e)}
+                        />
+                        
+                        <div
+                          className="crop-area"
+                          style={{
+                            left: `${Math.min(cropLines.vertical1, cropLines.vertical2)}%`,
+                            top: `${Math.min(cropLines.horizontal1, cropLines.horizontal2)}%`,
+                            width: `${Math.abs(cropLines.vertical2 - cropLines.vertical1)}%`,
+                            height: `${Math.abs(cropLines.horizontal2 - cropLines.horizontal1)}%`
+                          }}
+                        />
+                      </>
+                    )}
+
+                    {editorMode === 'gradient' && selectionArea && (
+                      <div
+                        className="selection-rectangle"
+                        style={{
+                          left: `${selectionArea.left * 100}%`,
+                          top: `${selectionArea.top * 100}%`,
+                          width: `${selectionArea.width * 100}%`,
+                          height: `${selectionArea.height * 100}%`
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
                 
@@ -502,6 +909,26 @@ const EditFabric = () => {
                   onWheel={handlePreviewWheel}
                   style={{ cursor: isPreviewPanning ? 'grabbing' : 'grab' }}
                 />
+              </div>
+            )}
+            
+            {imageLoaded && (
+              <div className="feature-buttons-section">
+                <h3>Tools</h3>
+                <div className="feature-buttons">
+                  <button 
+                    className={`feature-button ${editorMode === 'crop' ? 'active' : ''}`}
+                    onClick={() => handleModeSwitch('crop')}
+                  >
+                    Crop & Tile
+                  </button>
+                  <button 
+                    className={`feature-button ${editorMode === 'gradient' ? 'active' : ''}`}
+                    onClick={() => handleModeSwitch('gradient')}
+                  >
+                    Gradient Removal
+                  </button>
+                </div>
               </div>
             )}
           </div>
